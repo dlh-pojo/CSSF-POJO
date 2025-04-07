@@ -1,0 +1,28 @@
+class ColorLoss(nn.Module):
+    """颜色感知损失"""
+    def __init__(self, lambda_local=1, lambda_global=10):
+        super().__init__()
+        self.lambda_local = lambda_local
+        self.lambda_global = lambda_global
+
+    def forward(self, pred, target):
+        # 局部颜色一致性
+        local_loss = F.mse_loss(pred.mean(dim=[2,3]), target.mean(dim=[2,3]))
+        
+        # 全局颜色分布匹配
+        global_loss = F.mse_loss(pred.var(dim=[2,3]), target.var(dim=[2,3]))
+        
+        return self.lambda_local*local_loss + self.lambda_global*global_loss
+
+class StructureLoss(nn.Module):
+    """结构保留损失"""
+    def __init__(self, encoder):
+        super().__init__()
+        self.encoder = encoder
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+    def forward(self, pred, gray):
+        pred_feats = self.encoder(pred)
+        gray_feats = self.encoder(gray)
+        return sum([F.mse_loss(p, g) for p, g in zip(pred_feats, gray_feats)])

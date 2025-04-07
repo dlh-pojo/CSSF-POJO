@@ -1,0 +1,65 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class AdaAttN(nn.Module):
+    """自适应注意力归一化模块"""
+    def __init__(self, in_planes, key_planes):
+        super().__init__()
+        self.key_planes = key_planes or in_planes
+        self.f = nn.Conv2d(self.key_planes, self.key_planes, 1)
+        self.g = nn.Conv2d(self.key_planes, self.key_planes, 1)
+        self.h = nn.Conv2d(in_planes, in_planes, 1)
+        self.fusion = nn.Conv2d(in_planes, in_planes, 1)
+
+    def forward(self, content, style, content_key, style_key):
+        # 特征归一化与相似度计算
+        F_norm = self.f(F.normalize(content_key))
+        G_norm = self.g(F.normalize(style_key))
+        H_style = self.h(style)
+        
+        # 注意力矩阵计算
+        attn = torch.bmm(F_norm.view(*F_norm.shape[:2], -1).permute(0,2,1),
+                        G_norm.view(*G_norm.shape[:2], -1))
+        attn = F.softmax(attn, dim=-1)
+        
+        # 颜色迁移
+        transferred = torch.bmm(attn, H_style.view(*H_style.shape[:2], -1).permute(0,2,1))
+        return self.fusion(transferred.permute(0,2,1).view_as(content))
+
+class CSSMGenerator(nn.Module):
+    """跨尺度语义映射生成器"""
+    def __init__(self):
+        super().__init__()
+        # VGG特征提取器
+        self.encoder = VGGEncoder()
+        # 跨尺度融合模块
+        self.cross_scale_fusion = nn.ModuleList([
+            CrossScaleBlock(256), 
+            CrossScaleBlock(512)
+        ])
+        # 语义映射-着色模块
+        self.smcm = nn.ModuleDict({
+            'low': AdaAttN(256, 384),
+            'high': AdaAttN(512, 768)
+        })
+        # 颜色融合解码器
+        self.decoder = Decoder()
+
+    def forward(self, gray, ref):
+        # 特征提取
+        gray_feats = self.encoder(gray)
+        ref_feats = self.encoder(ref)
+        
+        # 跨尺度融合
+        fused = []
+        for i, block in enumerate(self.cross_scale_fusion):
+            fused.append(block(gray_feats[i], ref_feats[i]))
+        
+        # 语义映射着色
+        colorized = []
+        colorized.append(self.smcm['low'](fused, fused, ...))
+        colorized.append(self.smcm['high'](fused, fused, ...))
+        
+        # 解码输出
+        return self.decoder(torch.cat(colorized, dim=1))
